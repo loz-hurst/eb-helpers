@@ -109,9 +109,21 @@ then
 fi
 
 # Do some basic checks before we get in too deep - "fail early"
-if ! which pip &>/dev/null
+if which pip &>/dev/null && pip --version | grep -q '(python 3'
 then
-    echo "pip command not found - is pip installed?" >&2
+    # We checked the Python version is 3 above - pip --version outputs the
+    # Python version which we can grep for, e.g.:
+    # pip 9.0.3 from /usr/lib/python3.6/site-packages (python 3.6)
+    # pip 20.3.4 from /tmp/venv/local/lib/python2.7/site-packages/pip (python 2.7)
+    PIP_CMD=pip
+# On CentOS 7 the default system python is still Python 2 - checking for
+# version 3 specific command...
+elif which pip3 &>/dev/null
+then
+    PIP_CMD=pip3
+    PYTHON_CMD=python3  # Match the pip command
+else
+    echo "pip (or pip3) command not found - is pip installed?" >&2
     exit 1
 fi
 
@@ -149,9 +161,15 @@ echo "Creating virtualenv in $EB_VENV_DIR..."
 # I found it to be hit and miss whether virtualenv or the venv module
 # were available on systems, so install it to a temporary location.
 venv_tmp="$( mktemp -d )"
-pip install $PIP_INSTALL_OPTS --prefix="$venv_tmp" virtualenv
-# Assume there is only python version there
-PYTHONPATH="$venv_tmp/lib/$( ls "$venv_tmp/lib" | head -n1 )/site-packages" "$venv_tmp/bin/virtualenv" "$TARGET/$EB_VENV_DIR"
+$PIP_CMD install $PIP_INSTALL_OPTS --prefix="$venv_tmp" virtualenv
+if [[ ! -z "$PYTHON_CMD" ]]
+then
+    VENV_OPTS="--python=$PYTHON_CMD"
+else
+    VENV_OPTS=""
+fi
+# Assume there is only 1 python version there
+PYTHONPATH="$venv_tmp/lib/$( ls "$venv_tmp/lib" | head -n1 )/site-packages" "$venv_tmp/bin/virtualenv" $VENV_OPTS "$TARGET/$EB_VENV_DIR"
 # Tidy up
 rm -rf "$venv_tmp"
 unset venv_tmp
@@ -159,7 +177,8 @@ unset venv_tmp
 # Load the environment
 source "$TARGET/$EB_VENV_DIR/bin/activate"
 
-# Install re-requisites
+# Install re-requisites - now inside the venv so "pip" will always be
+# the right version to use.
 echo "Installing prerequisites..."
 pip install $PIP_INSTALL_OPTS vsc-install
 pip install $PIP_INSTALL_OPTS vsc-base
