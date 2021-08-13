@@ -1,0 +1,214 @@
+#!/bin/bash
+
+# Copyright 2021 Laurence Alexander Hurst
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# Abort on error
+set -e
+
+opts=$( getopt -o h\?e:f:b:c:s: --long help,easybuild-source-path:,install-sources:,install-framework-source:,install-easyblocks-source:,install-easyconfigs-source: -n "$( basename "$0" )" -- "$@" )
+eval set -- "$opts"
+unset opts
+
+SOURCES_PATH=""  # Path to installation files
+FRAMEWORK_SOURCE_PATH=""  # Override path for the framework
+EASYBLOCKS_SOURCE_PATH=""  # Override path for the framework
+EASYCONFIGS_SOURCE_PATH=""  # Override path for the framework
+EB_SOURCES_PATH=""  # Path to tell EB to use for its sources
+EB_CONFIG_FILE="eb-config.cfg"  # Might want to make this configurable?
+EB_VENV_DIR="venv" # Might want to make this configurable?
+
+usage() {
+    cat - >&2 <<EOF
+Usage: $0 [-h|-?|--help] [-esource_storage_path|--easybuild-source-path=source_storage_path] [-ssource_directory|--install-sources=source_directory] [-fsource_storage_path|--install-framework-source=source_storage_path] [-bsource_storage_path|--install-easyblocks-source=source_storage_path] [-csource_storage_path|--install-easyconfigs-source=source_storage_path] target_directory
+
+This script will create a new EasyBuild environment, with its own 
+virtualenv containing EasyBuild in $EB_VENV_DIR subdirectory.
+
+If given a directory containing EasyBuild source files, it will install
+EasyBuild from there (in 'editable mode', that is using the sources
+directly), otherwise it will try to install from GitHub.
+
+If the sources directory contains a subdirectory called 'ext', pip will
+be instructed to only install packages found there - make sure it
+contains all the dependencies required if you want to use this feature.
+(The eb-download script will help you with this.)
+
+-h|-?|--help) Display this message and exit
+-e|--easybuild-source-path) The path to configure EasyBuild to store/
+    look for package sources.
+-s|--install-sources) Specify the path to where the EasyBuild sources (
+    easybuild-framework, easybuild-easyconfigs, easybuild-easyconfigs)
+    can be found.
+-f|--install-framework-source) Override the sources path just for
+    the framework.
+-b|--install-easyblocks-source) Override the sources path just
+    for the easyblocks.
+-c|--install-easyconfigs-source) Override the sources path just
+    for the easyconfigs.
+target_directory) Directory into which to create the new environment
+EOF
+}
+
+while true
+do
+    case "$1" in
+        -h|-\?|--help)
+            usage
+            exit
+            ;;
+        -s|--install-sources)
+            SOURCES_PATH="$2"
+            shift 2
+            ;;
+        -f|--install-framework-source)
+            FRAMEWORK_SOURCE_PATH="$2"
+            shift 2
+            ;;
+        -b|--install-easyblocks-source)
+            EASYBLOCKS_SOURCE_PATH="$2"
+            shift 2
+            ;;
+        -c|--install-easyconfigs-source)
+            EASYCONFIGS_SOURCE_PATH="$2"
+            shift 2
+            ;;
+        -e|--easybuild-source-path)
+            EB_SOURCES_PATH="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "ERROR: This code should be unreachable!" >&2
+            exit 1
+            ll
+    esac
+done
+
+TARGET="$1"
+if [[ -z "$TARGET" ]]
+then
+    echo "No target directory specified!" >&2
+    usage
+    exit 1
+fi
+
+# Do some basic checks before we get in too deep - "fail early"
+if ! which pip &>/dev/null
+then
+    echo "pip command not found - is pip installed?" >&2
+    exit 1
+fi
+
+if ! which mktemp &>/dev/null
+then
+    echo "mktemp command not found - is mktemp installed?" >&2
+    exit 1
+fi
+
+if [[ -e "$TARGET/$EB_CONFIG_FILE" ]] || [[ -e "$TARGET/$EB_VENV_DIR" ]]
+then
+    echo "Target $TARGET looks like it is already setup?" >&2
+    echo "(remove $EB_CONFIG_FILE and $EB_VENV_DIR to re-do setup)" >&2
+    exit 1
+fi
+
+# Make the target, if it does not exist
+if ! [ -d "$TARGET" ]
+then
+    mkdir -p "$TARGET"
+fi
+
+# Extra arguments for pip if using local sources
+if [[ -n "$SOURCES_PATH" ]] && [[ -e "$SOURCES_PATH/ext" ]]
+then
+    # Make pip run entirely offline using packages from "$SOURCES_PATH/ext"
+    echo "Using $SOURCES_PATH/ext for pip packages."
+    PIP_INSTALL_OPTS="--no-index --find-links=$SOURCES_PATH/ext"
+else
+    PIP_INSTALL_OPTS=""
+fi
+
+# Create the virtualenv:
+echo "Creating virtualenv in $EB_VENV_DIR..."
+# I found it to be hit and miss whether virtualenv or the venv module
+# were available on systems, so install it to a temporary location.
+venv_tmp="$( mktemp -d )"
+pip install $PIP_INSTALL_OPTS --prefix="$venv_tmp" virtualenv
+# Assume there is only python version there
+PYTHONPATH="$venv_tmp/lib/$( ls "$venv_tmp/lib" | head -n1 )/site-packages" "$venv_tmp/bin/virtualenv" "$TARGET/$EB_VENV_DIR"
+# Tidy up
+rm -rf "$venv_tmp"
+unset venv_tmp
+
+# Load the environment
+source "$TARGET/$EB_VENV_DIR/bin/activate"
+
+# Install re-requisites
+echo "Installing prerequisites..."
+pip install $PIP_INSTALL_OPTS vsc-install
+pip install $PIP_INSTALL_OPTS vsc-base
+
+# Install EasyBuild
+if [[ -z "$SOURCES_PATH" ]]
+then
+    # Installing from github
+    EB_SOURCE="https://github.com/easybuilders"
+    EB_SOURCE_SUFFIX=".git"
+else
+    EB_SOURCE="$SOURCES_PATH"
+    EB_SOURCE_SUFFIX=""
+fi
+echo "Installing EasyBuild from $EB_SOURCE..."
+if [[ -n "$FRAMEWORK_SOURCE_PATH" ]]
+then
+    pip install $PIP_INSTALL_OPTS -e $FRAMEWORK_SOURCE_PATH/easybuild-framework
+else
+    pip install $PIP_INSTALL_OPTS -e $EB_SOURCE/easybuild-framework$EB_SOURCE_SUFFIX
+fi
+if [[ -n "$EASYBLOCKS_SOURCE_PATH" ]]
+then
+    pip install $PIP_INSTALL_OPTS -e $EASYBLOCKS_SOURCE_PATH/easybuild-easyblocks
+else
+    pip install $PIP_INSTALL_OPTS -e $EB_SOURCE/easybuild-easyblocks$EB_SOURCE_SUFFIX
+fi
+if [[ -n "$EASYCONFIGS_SOURCE_PATH" ]]
+then
+    pip install $PIP_INSTALL_OPTS -e $EASYCONFIGS_SOURCE_PATH/easybuild-easyconfigs
+else
+    pip install $PIP_INSTALL_OPTS -e $EB_SOURCE/easybuild-easyconfigs$EB_SOURCE_SUFFIX
+fi
+
+# Create a configuration file for EasyBuild
+cat - >"$TARGET/$EB_CONFIG_FILE" <<EOF
+[config]
+# Using /dev/shm (ramdisk) will massively reduce the build time, provide it is large enough
+buildpath = /dev/shm/eb-build
+installpath = $TARGET
+EOF
+
+if [[ -n "$EB_SOURCES_PATH" ]]
+then
+    echo "sourcepath = $EB_SOURCES_PATH" >> "$TARGET/$EB_CONFIG_FILE"
+fi
+
+echo "All done."
+echo "To use:"
+echo "source $TARGET/$EB_VENV_DIR/bin/activate"
+echo "export EASYBUILD_CONFIGFILES=\"$TARGET/$EB_CONFIG_FILE\""
+echo "eb --version  # To check it is running"

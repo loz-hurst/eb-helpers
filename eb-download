@@ -1,0 +1,141 @@
+#!/bin/bash
+
+# Copyright 2021 Laurence Alexander Hurst
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# Abort on error
+set -e
+
+opts=$( getopt -o h\?d --long help,depends,dependencies -n "$( basename "$0" )" -- "$@" )
+eval set -- "$opts"
+unset opts
+
+usage() {
+    cat - >&2 <<EOF
+Usage: $0 [-h|-?|--help] [-d|--depends|--dependencies] target_directory
+
+This script will download (or update with 'git pull') the EasyBuild
+sources and (optionally) its dependencies, to aid bootstrapping an
+EasyBuild install.
+
+-h|-?|--help) Display this message and exit
+-d|--depends|--dependencies) Fetch the dependencies too (requires 'pip')
+target_directory) Directory into which to fetch EasyBuild sources
+EOF
+}
+
+# Won't fetch dependencies unless user asks us to
+FETCH_DEPS=0
+
+while true
+do
+    case "$1" in
+        -h|-\?|--help)
+            usage
+            exit
+            ;;
+        -d|--depends|--dependencies)
+            FETCH_DEPS=1
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "ERROR: This code should be unreachable!" >&2
+            exit 1
+            ll
+    esac
+done
+
+TARGET="$1"
+if [[ -z "$TARGET" ]]
+then
+    echo "No target directory specified!" >&2
+    usage
+    exit 1
+fi
+
+# Do some basic checks before we get in too deep - "fail early"
+if ! which git &>/dev/null
+then
+    echo "git command not found - is git installed?" >&2
+    exit 1
+fi
+
+if [[ $FETCH_DEPS -eq 1 ]] && ! which pip &>/dev/null
+then
+    echo "pip command not found - is pip installed?" >&2
+    exit 1
+fi
+
+# Make the target, if it does not exist
+if ! [ -d "$TARGET" ]
+then
+    mkdir -p "$TARGET"
+fi
+
+# Go there
+cd "$TARGET"
+
+# Start by fetching dependencies, if requested
+if [[ $FETCH_DEPS -eq 1 ]]
+then
+    if ! [ -d ext ]
+    then
+        mkdir ext
+    else
+        echo "Warning: $TARGET/ext directory already exists" >&2
+        echo "downloading there anyway but this might not be what you wanted." >&2
+    fi
+
+    # We want vsc-base and virtualenv
+    packages="vsc-base virtualenv"
+    echo "Fetching dependencies:"
+    cd ext
+    for package in $packages
+    do
+        echo "$package..."
+        pip download $package
+    done
+    cd ..
+    echo "Fetched all dependencies."
+fi
+
+# Fetch EasyBuild
+echo "Fetching EasyBuild:"
+for component in easybuild-framework easybuild-easyblocks easybuild-easyconfigs
+do
+    if [ -e "$component" ]
+    then
+        echo "$component already downloaded - updating main branch for you..."
+        cd "$component"
+        if [[ $(git rev-parse --abbrev-ref HEAD) == "develop" ]]
+        then
+            # develop branch checked out
+            git pull origin || echo '!!! Pull failed !!!  Carrying on regardless...' "($component)" >&2
+        else
+            # another branch checked out, as long as its a ff we can update
+            git fetch origin develop:develop || echo '!!! Fetch failed !!!  Carrying on regardless...' "($component)" >&2
+        fi
+        cd ..
+    else
+        echo "Fetching $component..."
+        git clone https://github.com/easybuilders/$component.git
+    fi
+done
+
+echo "All done."

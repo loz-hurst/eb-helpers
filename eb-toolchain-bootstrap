@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# Copyright 2021 Laurence Alexander Hurst
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# Abort on error
+set -e
+
+opts=$( getopt -o h\?efbcs: --long help,create-easybuild-sources-folder,clone-framework,clone-easyblocks,clone-easyconfigs,install-sources: -n "$( basename "$0" )" -- "$@" )
+eval set -- "$opts"
+unset opts
+
+SOURCES_PATH=""  # Path to installation files
+CREATE_EB_SOURCES=0
+CLONE_FRAMEWORK=0
+CLONE_EASYBLOCKS=0
+CLONE_EASYCONFIGS=0
+
+usage() {
+    cat - >&2 <<EOF
+Usage: $0 [-h|-?|--help] [-e|--create-easybuild-sources-folder] [-f|--clone-framework] [-b|--clone-easyblocks] [-c|--clone-easyconfigs] [-ssource_directory|--install-sources=source_directory] target_directory
+
+This script will prepare a new toolchain environment, ready for
+platform-specific environments to be created.
+
+If given a directory containing EasyBuild source files, it can
+(optionally) clone each of the framework, easyblocks or easyconfigs to
+provide an isolated copy for development without impacting other
+toolchain environments.
+
+-h|-?|--help) Display this message and exit
+-e|--create-easybuild-sources-folder) Create a folder for EasyBuild to
+    store its source files in within the toolchain folder.
+-f|--clone-framework) Clone the framework sources from the sources path
+    (requires -s/--install-sources)
+-b|--clone-easyblocks) Clone the easyblocks sources from the sources
+    path (requires -s/--install-sources)
+-c|--clone-easyconfigs) Clone the easyconfigs sources from the sources
+    path (requires -s/--install-sources)
+-s|--install-sources) Specify the path to where the EasyBuild sources (
+    easybuild-framework, easybuild-easyconfigs, easybuild-easyconfigs)
+    can be found.
+target_directory) Directory into which to create the new environment
+EOF
+}
+
+while true
+do
+    case "$1" in
+        -h|-\?|--help)
+            usage
+            exit
+            ;;
+        -e|--create-easybuild-sources-folder)
+            CREATE_EB_SOURCES=1
+            shift
+            ;;
+        -f|--clone-framework)
+            CLONE_FRAMEWORK=1
+            shift
+            ;;
+        -b|--clone-easyblocks)
+            CLONE_EASYBLOCKS=1
+            shift
+            ;;
+        -c|--clone-easyconfigs)
+            CLONE_EASYCONFIGS=1
+            shift
+            ;;
+        -s|--install-sources)
+            SOURCES_PATH="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "ERROR: This code should be unreachable!" >&2
+            exit 1
+            ll
+    esac
+done
+
+TARGET="$1"
+if [[ -z "$TARGET" ]]
+then
+    echo "No target directory specified!" >&2
+    usage
+    exit 1
+fi
+
+if [[ $CLONE_FRAMEWORK -eq 1 ]] || [[ $CLONE_EASYBLOCKS -eq 1 ]] || [[ $CLONE_EASYCONFIGS -eq 1 ]]
+then
+    if [[ -z "$SOURCES_PATH" ]]
+    then
+        echo "--install-sources is not optional if you wish to clone any part of EasyBuild" >&2
+        usage
+        exit 1
+    fi
+fi
+
+mkdir "$TARGET"
+
+if [[ $CREATE_EB_SOURCES -eq 1 ]]
+then
+    mkdir "$TARGET/sources"
+fi
+
+if [[ $CLONE_FRAMEWORK -eq 1 ]]
+then
+    git clone $SOURCES_PATH/easybuild-framework $TARGET/easybuild-framework
+fi
+
+if [[ $CLONE_EASYBLOCKS -eq 1 ]]
+then
+    git clone $SOURCES_PATH/easybuild-easyblocks $TARGET/easybuild-easyblocks
+fi
+
+if [[ $CLONE_EASYCONFIGS -eq 1 ]]
+then
+    git clone $SOURCES_PATH/easybuild-easyconfigs $TARGET/easybuild-easyconfigs
+fi
